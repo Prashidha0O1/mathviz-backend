@@ -1,0 +1,133 @@
+import os
+import re
+import subprocess
+import tempfile
+import uuid
+import logging
+from pathlib import Path
+from typing import Optional
+
+import google.generativeai as genai
+from fastapi import WebSocket, HTTPException
+
+# --- Configuration ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable not set.")
+genai.configure(api_key=GEMINI_API_KEY)
+generation_config = {"temperature": 0.3, "max_output_tokens": 4096}
+safety_settings = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+]
+ai_model = genai.GenerativeModel(
+    model_name="gemini-1.5-flash",
+    generation_config=generation_config,
+    safety_settings=safety_settings,
+)
+
+# --- Security Validation ---
+DANGEROUS_KEYWORDS = [
+    "os", "sys", "subprocess", "shutil", "requests", "socket", "urllib",
+    "eval", "exec", "open", "input", "ctypes", "pickle", "glob",
+]
+DANGEROUS_PATTERN = re.compile(r'\b(' + '|'.join(DANGEROUS_KEYWORDS) + r')\b')
+
+def validate_manim_code(code: str):
+    if DANGEROUS_PATTERN.search(code):
+        keyword = DANGEROUS_PATTERN.search(code).group(1)
+        logger.warning(f"Validation failed: unsafe keyword '{keyword}' found.")
+        raise HTTPException(status_code=400, detail=f"Generated code contains disallowed keyword: '{keyword}'.")
+    if "class GeneratedScene(Scene):" not in code:
+        raise HTTPException(status_code=500, detail="AI failed to generate a valid Manim scene named 'GeneratedScene'.")
+    try:
+        compile(code, "<string>", "exec")
+    except SyntaxError as e:
+        raise HTTPException(status_code=500, detail=f"AI-generated code is not valid Python: {e}")
+    logger.info("Generated code passed security validation.")
+
+async def send_status_update(websocket: Optional[WebSocket], message: str):
+    logger.info(message)
+    if websocket:
+        await websocket.send_json({"status": message})
+
+async def get_manim_code_from_ai(question: str) -> str:
+    prompt = f"""
+    You are an expert Manim programmer (Community v0.18.0). Generate a complete, self-contained Python script.
+    
+    Requirements:
+    1.  Import from `manim`. You can also import `numpy`.
+    2.  Define a single scene: `class GeneratedScene(Scene):`.
+    3.  Visually explain: "{question}".
+    4.  Duration: 5-15 seconds.
+    5.  Use large text and simple, bold shapes for low resolution (320x240).
+    6.  DO NOT use any modules other than `manim` and `numpy`.
+    7.  Provide ONLY the Python code inside a single markdown block.
+    """
+    try:
+        response = await ai_model.generate_content_async(prompt)
+        code = response.text
+        if "```python" in code:
+            code = code.split("```python")[1].split("```")[0].strip()
+        elif "```" in code:
+            code = code.split("```")[1].strip()
+            if code.startswith("python"):
+                code = code[6:].strip()
+        return code
+    except Exception as e:
+        logger.error(f"Error calling AI model: {e}")
+        raise HTTPException(status_code=500, detail=f"AI model failed to generate code: {e}")
+
+async def generate_animation_video(question: str, websocket: Optional[WebSocket] = None) -> str:
+    temp_dir = tempfile.mkdtemp()
+    try:
+        await send_status_update(websocket, "Generating animation script...")
+        manim_code = await get_manim_code_from_ai(question)
+        
+        await send_status_update(websocket, "Validating generated script...")
+        validate_manim_code(manim_code)
+
+        script_path = Path(temp_dir) / "generated_scene.py"
+        script_path.write_text(manim_code)
+
+        await send_status_update(websocket, "Rendering animation with Manim...")
+        manim_cmd = ["manim", str(script_path), "GeneratedScene", "--format=mp4", "--media_dir", temp_dir, "-ql"]
+        process = subprocess.run(manim_cmd, capture_output=True, text=True, cwd=temp_dir, timeout=60)
+        
+        if process.returncode != 0:
+            error_output = process.stderr or process.stdout
+            logger.error(f"Manim rendering failed:\n{error_output}")
+            raise HTTPException(status_code=500, detail=f"Manim rendering failed: {error_output[:250]}")
+        
+        raw_video_path = Path(temp_dir) / "videos/generated_scene/480p15/GeneratedScene.mp4"
+        if not raw_video_path.exists():
+             raise HTTPException(status_code=500, detail="Manim output video not found.")
+
+        await send_status_update(websocket, "Encoding video for web delivery...")
+        final_video_name = f"{uuid.uuid4()}.mp4"
+        cache_dir = Path("backend/video_cache")
+        cache_dir.mkdir(exist_ok=True)
+        final_video_path = str(cache_dir / final_video_name)
+
+        ffmpeg_cmd = ["ffmpeg", "-y", "-i", str(raw_video_path), "-vcodec", "libx264", "-acodec", "aac", "-vf", "scale=320:-2", "-preset", "fast", "-crf", "24", final_video_path]
+        process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=30)
+        
+        if process.returncode != 0:
+            error_output = process.stderr or process.stdout
+            logger.error(f"FFmpeg failed:\n{error_output}")
+            raise HTTPException(status_code=500, detail=f"FFmpeg optimization failed: {error_output[:250]}")
+
+        await send_status_update(websocket, "Processing complete.")
+        return final_video_path
+    except subprocess.TimeoutExpired:
+        logger.error("A subprocess (Manim or FFmpeg) timed out.")
+        raise HTTPException(status_code=500, detail="Video generation took too long and was cancelled.")
+    finally:
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.info(f"Cleaned up temporary directory: {temp_dir}")

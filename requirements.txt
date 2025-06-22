@@ -1,0 +1,8 @@
+fastapi[all]
+pydantic
+manim==0.18.0
+ffmpeg-python
+redis
+google-generativeai
+python-dotenv
+numpy
