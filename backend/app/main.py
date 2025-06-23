@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from app.api.v1 import animation_routes
+from backend.app.api.v1 import animation_routes
 
 # Load environment variables from .env file
 load_dotenv()
