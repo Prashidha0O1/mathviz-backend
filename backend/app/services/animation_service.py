@@ -64,7 +64,7 @@ async def get_manim_code_from_ai(question: str) -> str:
     1.  Import from `manim`. You can also import `numpy`.
     2.  Define a single scene: `class GeneratedScene(Scene):`.
     3.  Visually explain: "{question}".
-    4.  Duration: 5-15 seconds.
+    4.  Duration: 5-50 seconds.
     5.  Use large text and simple, bold shapes for low resolution (320x240).
     6.  DO NOT use any modules other than `manim` and `numpy`.
     7.  Provide ONLY the Python code inside a single markdown block.
@@ -96,17 +96,42 @@ async def generate_animation_video(question: str, websocket: Optional[WebSocket]
         script_path.write_text(manim_code)
 
         await send_status_update(websocket, "Rendering animation with Manim...")
-        manim_cmd = ["manim", str(script_path), "GeneratedScene", "--format=mp4", "--media_dir", temp_dir, "-ql"]
-        process = subprocess.run(manim_cmd, capture_output=True, text=True, cwd=temp_dir, timeout=60)
+        
+        # Minimal Manim command to avoid parameter conflicts
+        manim_cmd = [
+            "manim",
+            str(script_path),
+            "GeneratedScene",
+            "--media_dir", str(temp_dir)
+        ]
+        
+        logger.info(f"Running Manim command: {' '.join(manim_cmd)}")
+        process = subprocess.run(manim_cmd, capture_output=True, text=True, cwd=temp_dir, timeout=120)
         
         if process.returncode != 0:
             error_output = process.stderr or process.stdout
             logger.error(f"Manim rendering failed:\n{error_output}")
-            raise HTTPException(status_code=500, detail=f"Manim rendering failed: {error_output[:250]}")
+            raise HTTPException(status_code=500, detail=f"Manim rendering failed: {error_output[:500]}")
         
-        raw_video_path = Path(temp_dir) / "videos/generated_scene/480p15/GeneratedScene.mp4"
-        if not raw_video_path.exists():
-             raise HTTPException(status_code=500, detail="Manim output video not found.")
+        # More flexible path checking for Manim output (default quality paths)
+        possible_paths = [
+            Path(temp_dir) / "videos" / "generated_scene" / "1080p60" / "GeneratedScene.mp4",
+            Path(temp_dir) / "videos" / "generated_scene" / "720p30" / "GeneratedScene.mp4", 
+            Path(temp_dir) / "videos" / "generated_scene" / "480p15" / "GeneratedScene.mp4",
+            Path(temp_dir) / "videos" / "GeneratedScene.mp4",
+        ]
+        
+        raw_video_path = None
+        for path in possible_paths:
+            if path.exists():
+                raw_video_path = path
+                break
+        
+        if not raw_video_path:
+            # List all files in temp_dir for debugging
+            all_files = list(Path(temp_dir).rglob("*.mp4"))
+            logger.error(f"Video files found: {all_files}")
+            raise HTTPException(status_code=500, detail=f"Manim output video not found. Available files: {all_files}")
 
         await send_status_update(websocket, "Encoding video for web delivery...")
         final_video_name = f"{uuid.uuid4()}.mp4"
@@ -114,19 +139,35 @@ async def generate_animation_video(question: str, websocket: Optional[WebSocket]
         cache_dir.mkdir(exist_ok=True)
         final_video_path = str(cache_dir / final_video_name)
 
-        ffmpeg_cmd = ["ffmpeg", "-y", "-i", str(raw_video_path), "-vcodec", "libx264", "-acodec", "aac", "-vf", "scale=320:-2", "-preset", "fast", "-crf", "24", final_video_path]
-        process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=30)
+        # Improved FFmpeg command with better error handling
+        ffmpeg_cmd = [
+            "ffmpeg", "-y", 
+            "-i", str(raw_video_path), 
+            "-vcodec", "libx264", 
+            "-preset", "fast", 
+            "-crf", "24", 
+            "-vf", "scale=320:-2",
+            "-movflags", "+faststart",  # Optimize for web streaming
+            final_video_path
+        ]
+        
+        logger.info(f"Running FFmpeg command: {' '.join(ffmpeg_cmd)}")
+        process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=60)
         
         if process.returncode != 0:
             error_output = process.stderr or process.stdout
             logger.error(f"FFmpeg failed:\n{error_output}")
-            raise HTTPException(status_code=500, detail=f"FFmpeg optimization failed: {error_output[:250]}")
+            raise HTTPException(status_code=500, detail=f"FFmpeg optimization failed: {error_output[:500]}")
 
         await send_status_update(websocket, "Processing complete.")
         return final_video_path
+        
     except subprocess.TimeoutExpired:
         logger.error("A subprocess (Manim or FFmpeg) timed out.")
         raise HTTPException(status_code=500, detail="Video generation took too long and was cancelled.")
+    except Exception as e:
+        logger.error(f"Unexpected error in generate_animation_video: {e}")
+        raise HTTPException(status_code=500, detail=f"Video generation failed: {str(e)}")
     finally:
         import shutil
         shutil.rmtree(temp_dir, ignore_errors=True)

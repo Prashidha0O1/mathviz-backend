@@ -20,6 +20,7 @@ app = FastAPI(
 # --- Shared Resources ---
 # Concurrency lock to allow only one video generation at a time
 generation_lock = asyncio.Lock()
+app.state.generation_lock = generation_lock
 
 # Redis client for caching
 try:
@@ -39,6 +40,7 @@ except redis.exceptions.ConnectionError as e:
         def set(self, key, value, ex=None):
             self._cache[key] = value
     redis_client = FallbackCache()
+app.state.redis_client = redis_client
 
 # --- CORS Configuration ---
 origins_str = os.getenv("CORS_ORIGINS", "http://localhost:3000")
