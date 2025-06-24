@@ -102,8 +102,15 @@ async def generate_animation_video(question: str, websocket: Optional[WebSocket]
             "manim",
             str(script_path),
             "GeneratedScene",
-            "--media_dir", str(temp_dir)
+            "--quality", "low",         # instead of '-ql'
+            "--format", "mp4",
+            "--media_dir", str(temp_dir),
+            "--disable_caching",
+            "--disable_preview",
+            "--no_save_last_frame",     # explicitly disable saving last frame
         ]
+
+
         
         logger.info(f"Running Manim command: {' '.join(manim_cmd)}")
         process = subprocess.run(manim_cmd, capture_output=True, text=True, cwd=temp_dir, timeout=120)
@@ -121,6 +128,12 @@ async def generate_animation_video(question: str, websocket: Optional[WebSocket]
             Path(temp_dir) / "videos" / "GeneratedScene.mp4",
         ]
         
+        logger.info(f"Got question: {question}")
+        logger.info(f"Manim code:\n{manim_code}")
+        logger.info(f"Temp dir created at: {temp_dir}")
+        logger.info(f"Checking possible output paths...")
+        logger.info(f"FFmpeg started...")
+
         raw_video_path = None
         for path in possible_paths:
             if path.exists():
