@@ -4,8 +4,8 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import FileResponse
 
-from backend.app.schemas.schemas import QuestionRequest
-from backend.app.services.animation_service import generate_animation_video, send_status_update
+from ...schemas.schemas import QuestionRequest
+from ...services.animation_service import generate_animation_video, send_status_update
 
 router = APIRouter()
 

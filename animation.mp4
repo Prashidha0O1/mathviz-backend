@@ -1,1 +1,0 @@
-{"detail":"Manim rendering failed: C:\\Users\\Prashidha\\OneDrive\\Desktop\\Coding\\mathviz-backend\\venv\\lib\\site-packages\\click\\core.py:1193: UserWarning: The parameter -s is used more than once. Remove its duplicate as parameters should be unique.\n  parser = self.make_parser(ctx)\nC:\\Users"}
