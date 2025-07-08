@@ -57,27 +57,16 @@ async def send_status_update(websocket: Optional[WebSocket], message: str):
         await websocket.send_json({"status": message})
 
 async def get_manim_code_from_ai(question: str) -> str:
-    prompt = f"""
-    You are an expert Manim programmer (Community v0.18.0). Generate a complete, self-contained Python script.
-    
-    Requirements:
-    1.  Import from `manim`. You can also import `numpy`.
-    2.  Define a single scene: `class GeneratedScene(Scene):`.
-    3.  Visually explain: "{question}".
-    4.  Duration: 5-50 seconds.
-    5.  Use large text and simple, bold shapes for low resolution (320x240).
-    6.  DO NOT use any modules other than `manim` and `numpy`.
-    7.  Provide ONLY the Python code inside a single markdown block.
-    """
+    import os
+    template_path = os.path.join(os.path.dirname(__file__), "prompt_template.txt")
+    with open(template_path, "r", encoding="utf-8") as f:
+        prompt_template = f.read()
+    # Insert the user question at the end for context
+    prompt = f"{prompt_template}\n\nUser request: {question}\n"
     try:
         response = await ai_model.generate_content_async(prompt)
         code = response.text
-        if "```python" in code:
-            code = code.split("```python")[1].split("```")[0].strip()
-        elif "```" in code:
-            code = code.split("```")[1].strip()
-            if code.startswith("python"):
-                code = code[6:].strip()
+        # Optionally, you can parse for <code>...</code> or <plainResponse>...</plainResponse> here
         return code
     except Exception as e:
         logger.error(f"Error calling AI model: {e}")
