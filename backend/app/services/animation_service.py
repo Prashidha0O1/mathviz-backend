@@ -102,12 +102,10 @@ async def generate_animation_video(question: str, websocket: Optional[WebSocket]
             "manim",
             str(script_path),
             "GeneratedScene",
-            "--quality", "low",         # instead of '-ql'
+            "-ql",
             "--format", "mp4",
             "--media_dir", str(temp_dir),
             "--disable_caching",
-            "--disable_preview",
-            "--no_save_last_frame",     # explicitly disable saving last frame
         ]
 
 
